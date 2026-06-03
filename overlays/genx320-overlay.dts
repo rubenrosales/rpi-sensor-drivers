@@ -34,6 +34,9 @@
 	reg_frag: fragment@5 {
 		target = <&cam1_reg>;
 		cam_reg: __overlay__ {
+			/* 500 ms lets CCAM5 on-module regulators stabilise before
+			 * the driver's first I2C access. Increase via dtoverlay
+			 * startup-delay-us=<N> if probe still times out. */
 			startup-delay-us = <500000>;
 		};
 	};
@@ -58,7 +61,15 @@
 				status = "okay";
 
 				clocks = <&cam1_clk>;
- 				clock-names = "inclk";
+				clock-names = "inclk";
+
+				/* Ask the Linux clock framework to program the RP1
+				 * GPCLK to 20 MHz at probe time.  The Pi firmware
+				 * already reads clock-frequency above before Linux
+				 * boots, but on Pi 5 the RP1 clock driver can reset
+				 * the rate unless assigned-clock-rates is also set. */
+				assigned-clocks = <&cam1_clk>;
+				assigned-clock-rates = <20000000>;
 
 				vadd-supply = <&cam1_reg>;
 				vddd1-supply = <&cam_dummy_reg>;
@@ -104,12 +115,17 @@
 		orientation = <&genx320>,"orientation:0";
 		media-controller = <&csi>,"brcm,media-controller?";
 		cam0 = <&i2c_frag>, "target:0=",<&i2c_csi_dsi0>,
-		 		<&csi_frag>, "target:0=",<&csi0>,
+				<&csi_frag>, "target:0=",<&csi0>,
 				<&clk_frag>, "target:0=",<&cam0_clk>,
 				<&reg_frag>, "target:0=",<&cam0_reg>,
 				<&reg_alwayson_frag>, "target:0=",<&cam0_reg>,
 				<&genx320>, "clocks:0=",<&cam0_clk>,
+				<&genx320>, "assigned-clocks:0=",<&cam0_clk>,
 				<&genx320>, "vadd-supply:0=",<&cam0_reg>;
 		always-on = <0>, "+99";
+		/* Timing knobs: increase if the sensor still doesn't respond.
+		 * Example: dtoverlay=genx320,rstn-delay-ms=600,startup-delay-us=800000 */
+		rstn-delay-ms    = <&genx320>,"rstn-delay-ms:0";
+		startup-delay-us = <&cam_reg>,"startup-delay-us:0";
 	};
 };
