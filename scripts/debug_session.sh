@@ -360,6 +360,10 @@ PYEOF
 
         sep
         info "Rebuilding driver..."
+        if [ ! -d drivers ]; then
+            warn "drivers/ directory not found. Running 'make prepare' first..."
+            make prepare
+        fi
         make psee_sensors
 
         sep
