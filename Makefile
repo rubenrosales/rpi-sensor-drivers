@@ -8,18 +8,30 @@ DTB_OUTPUT := /boot/overlays
 KERNEL_SRC := /lib/modules/$(kernelver)/build
 EXTRA_CFLAGS := "-DOMIT_PSEE_FORMATS"
 
+# Optional probe-debug patch.  Set PROBE_DEBUG=1 on the make prepare command
+# line to apply patches/0001-genx320-probe-debug-logging.patch after cloning.
+# Example: make prepare PROBE_DEBUG=1
+PROBE_DEBUG ?= 0
+PATCHES_DIR := patches
+
 # Targets
 all: psee_sensors genx320.dtbo imx636.dtbo
 
-drivers: 
-	@test -d drivers || (echo "Error: drivers not found. Please 'make prepare' manually" && exit 1)
-#	@test -f drivers.patched || (echo "Error: $(PATCH_FILE) not found." && exit 1)
+drivers:
+	@test -d drivers || (echo "Error: drivers not found. Run 'make prepare' first." && exit 1)
 
 prepare:
 	@echo "Cloning Drivers..."
 	git clone --branch kernel-6.12 https://github.com/prophesee-ai/linux-sensor-drivers.git drivers
 	git -C drivers checkout 7165d5e69ebed78dcc63b36e1d0f451c42aa7aaa
-#	touch drivers/.patched
+ifeq ($(PROBE_DEBUG),1)
+	@echo "Applying probe-debug logging patch..."
+	@patch -d drivers -p1 --fuzz=3 \
+		< $(PATCHES_DIR)/0001-genx320-probe-debug-logging.patch \
+		|| (echo "WARNING: patch did not apply cleanly — see .rej files in drivers/." \
+		    echo "Apply the logging additions manually as described in the patch comments."; true)
+	@touch drivers/.probe-debug-patched
+endif
 
 psee_sensors: drivers
 	@echo "Building PSEE Sensors Driver..."
@@ -53,4 +65,15 @@ clean: drivers
 	rm -rf *.dtbo
 	rm -rf *.ko
 
-.PHONY: all install uninstall clean
+# Re-clone with the probe-debug patch applied.
+# Tears down any existing drivers/ clone first.
+probe-debug:
+	rm -rf drivers
+	$(MAKE) prepare PROBE_DEBUG=1
+	$(MAKE) psee_sensors
+
+# Run the bring-up diagnostic (requires sudo for i2cdetect).
+diagnose:
+	sudo bash scripts/diagnose_genx320.sh
+
+.PHONY: all install uninstall clean probe-debug diagnose

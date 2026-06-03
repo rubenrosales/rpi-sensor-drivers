@@ -1,0 +1,115 @@
+From: rpi-sensor-drivers fork <noreply@example.com>
+Subject: [PATCH] genx320: add probe-time diagnostic logging
+
+Add dev_info() calls at each step inside genx320_power_on() and
+immediately before the first I2C register read in the boot-magic /
+chip-ID check.  This lets dmesg reveal whether regulators, the 20 MHz
+inclk, and the reset GPIO were exercised before -EREMOTEIO, which
+narrows "no power/contact" vs "powered but sensor silent" without a
+scope.
+
+Applies to: prophesee-ai/linux-sensor-drivers @ 7165d5e (kernel-6.12)
+
+If the patch rejects, apply the annotated hunks manually — the comments
+below each hunk describe exactly what to look for and where to insert.
+
+---
+ genx320/genx320.c | ~50 lines added
+---
+
+--- a/genx320/genx320.c
++++ b/genx320/genx320.c
+
+===========================================================================
+HUNK 1 — genx320_power_on(): log each rail + clock enable
+===========================================================================
+Context: Find the function that enables regulators and calls
+clk_prepare_enable(genx320->inclk).  Add dev_info lines after each
+successful enable so dmesg confirms the sequence completed.
+
+--- a/genx320/genx320.c
++++ b/genx320/genx320.c
+@@ genx320_power_on @@
+ 	ret = regulator_enable(genx320->vadd);
+ 	if (ret) {
+ 		dev_err(dev, "Failed to enable vadd regulator: %d\n", ret);
+-		return ret;
++		goto err_vadd;
+ 	}
++	dev_info(dev, "DIAG power_on: vadd regulator enabled\n");
+
+ 	ret = regulator_enable(genx320->vddd1);
+ 	if (ret) {
+ 		dev_err(dev, "Failed to enable vddd1 regulator: %d\n", ret);
+ 		goto err_vddd1;
+ 	}
++	dev_info(dev, "DIAG power_on: vddd1 regulator enabled\n");
+
+ 	ret = regulator_enable(genx320->vddd2);
+ 	if (ret) {
+ 		dev_err(dev, "Failed to enable vddd2 regulator: %d\n", ret);
+ 		goto err_vddd2;
+ 	}
++	dev_info(dev, "DIAG power_on: vddd2 regulator enabled\n");
+
+ 	ret = clk_prepare_enable(genx320->inclk);
+ 	if (ret) {
+ 		dev_err(dev, "Failed to enable sensor clk: %d\n", ret);
+ 		goto err_clk;
+ 	}
++	dev_info(dev, "DIAG power_on: inclk enabled, rate=%lu Hz (want 20000000)\n",
++		 clk_get_rate(genx320->inclk));
+
+-	gpiod_set_value_cansleep(genx320->reset_gpio, 0);
+-	msleep(genx320->rstn_delay_ms);
++	if (genx320->reset_gpio) {
++		dev_info(dev, "DIAG power_on: deasserting reset GPIO\n");
++		gpiod_set_value_cansleep(genx320->reset_gpio, 0);
++	} else {
++		dev_info(dev, "DIAG power_on: no reset GPIO (relying on hardware pull-up)\n");
++	}
++	dev_info(dev, "DIAG power_on: waiting %u ms post-reset\n",
++		 genx320->rstn_delay_ms);
++	msleep(genx320->rstn_delay_ms);
++	dev_info(dev, "DIAG power_on: done — beginning I2C probe\n");
+
+ 	return 0;
+
+===========================================================================
+HUNK 2 — genx320_identify_module() / boot-magic check: log before read
+===========================================================================
+Context: Find the function that contains this exact error line:
+    dev_err(dev, "register read ret %d\n", ret);
+The line immediately above it is the I2C/regmap read that can return
+-121 (-EREMOTEIO).  Add the dev_info BEFORE that read call.
+
+--- a/genx320/genx320.c
++++ b/genx320/genx320.c
+@@ genx320_identify_module / genx320_read_boot_magic @@
++	dev_info(dev, "DIAG identify: reading chip-ID register (I2C addr 0x%02x)\n",
++		 client->addr);
+ 	ret = genx320_read_reg(genx320, GENX320_REG_CHIP_ID, &val);
++	/* -121 = -EREMOTEIO here means the sensor did not ACK on I2C */
+ 	if (ret) {
+ 		dev_err(dev, "register read ret %d\n", ret);
+ 		return ret;
+ 	}
+
+---------------------------------------------------------------------------
+If the driver uses regmap_read instead of genx320_read_reg, the hunk is:
+
++	dev_info(dev, "DIAG identify: reading chip-ID register (I2C addr 0x%02x)\n",
++		 client->addr);
+ 	ret = regmap_read(genx320->regmap, GENX320_REG_CHIP_ID, &val);
++	/* -121 = -EREMOTEIO here means the sensor did not ACK on I2C */
+ 	if (ret) {
+ 		dev_err(dev, "register read ret %d\n", ret);
+ 		return ret;
+ 	}
+===========================================================================
+
+After applying, rebuild and reinstall:
+  make clean && make psee_sensors
+  sudo dkms install psee_sensor_drivers/1.0.1 -k $(uname -r)
+  sudo dtoverlay genx320        # or ,cam0
+  dmesg | grep DIAG
